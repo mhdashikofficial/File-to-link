@@ -1,77 +1,161 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Telegram Video Streamer</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body { background: linear-gradient(135deg, #667eea, #764ba2); min-height: 100vh; }
-        .card { max-width: 560px; margin: auto; border-radius: 18px; box-shadow: 0 15px 40px rgba(0,0,0,.25); }
-        .telegram-btn { display: inline-flex; align-items: center; padding: 10px 18px; border-radius: 30px; background: linear-gradient(135deg, #0088cc, #229ed9); color: #fff; font-weight: 600; text-decoration: none; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0,136,204,.6); } 70% { box-shadow: 0 0 0 14px rgba(0,136,204,0); } 100% { box-shadow: 0 0 0 0 rgba(0,136,204,0); } }
-        .video-player { width: 100%; height: 315px; border: none; border-radius: 12px; }
-        .progress { height: 20px; margin: 10px 0; }
-    </style>
-</head>
-<body class="d-flex align-items-center py-4">
-<div class="container">
-<div class="card p-4">
-<h3 class="text-center mb-3">🎥 Telegram Video Stream</h3>
-{% if message %}
-<div class="alert alert-{{ message_type }}">{{ message }}</div>
-{% endif %}
-{% if progress %}
-<div class="alert alert-info">
-    <strong>Status:</strong> {{ progress }}<br>
-    <small>Large files take 5-15 min. Refresh page to check.</small>
-    <div class="progress">
-        <div class="progress-bar" style="width: {{ progress_percent }}%"></div>
-    </div>
-</div>
-{% endif %}
-{% if api_error %}
-<div class="alert alert-warning">
-    <strong>Debug:</strong> {{ api_error }}<br><small>Check logs for details.</small>
-</div>
-{% endif %}
-<form method="POST">
-    <h6>Pyrogram Credentials (Required for Large Files)</h6>
-    <input class="form-control mb-3" name="api_id" placeholder="API ID (int)" type="number" required>
-    <input class="form-control mb-3" name="api_hash" placeholder="API Hash" required>
-    <input class="form-control mb-3" name="session_string" placeholder="Session String (1:BQA...)" required>
-    <input class="form-control mb-3" name="chat_id" placeholder="@channel or -100xxxx (optional)">
-    <div class="input-group mb-3">
-        <input class="form-control" name="telegram_link" placeholder="https://t.me/channelname/123" required>
-        <button class="btn btn-primary" type="submit">▶️ Start Stream</button>
-    </div>
-</form>
-{% if hls_url %}
-<div class="mt-4">
-    <h6 class="text-center mb-3">Now Playing:</h6>
-    <video id="video" class="video-player" controls autoplay muted></video>
-    <div class="text-center mt-2"><small>Powered by Pyrogram + FFmpeg</small></div>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-<script>
-    var video = document.getElementById('video');
-    var hls_url = "{{ hls_url }}";
-    if (Hls.isSupported()) {
-        var hls = new Hls();
-        hls.loadSource(hls_url);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = hls_url;
-        video.addEventListener('loadedmetadata', () => video.play());
-    }
-</script>
-{% endif %}
-<div class="mt-4 text-center">
-    <div class="text-muted small">© 2026 | Large files auto-download to /tmp then HLS</div>
-    <a href="https://t.me/alexanderthegreatxx" target="_blank" class="telegram-btn mt-2">Connect on Telegram</a>
-</div>
-</div>
-</div>
-</body>
-</html>
+from flask import Flask, render_template, request, send_from_directory
+import re
+import os
+import uuid
+import subprocess
+import logging
+import shutil
+import asyncio
+from pyrogram import Client
+from pyrogram.types import Message
+from pyrogram.errors import FloodWait, SessionPasswordNeeded
+
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+OUTPUT_FOLDER = '/tmp/streams'
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+
+def parse_telegram_link(link):
+    pattern = r'^https://t\.me/([a-zA-Z0-9_]+)/(\d+)$'
+    match = re.match(pattern, link)
+    if match:
+        channel = match.group(1)
+        post_id = int(match.group(2))
+        from_chat_id = f"@{channel}" if not channel.startswith('-100') else channel
+        return from_chat_id, post_id
+    return None, None
+
+async def download_large_file(api_id, api_hash, session_string, from_chat_id, message_id, temp_path):
+    """Download file progressively with Pyrogram"""
+    app = Client("temp_session", api_id=api_id, api_hash=api_hash, session_string=session_string, in_memory=True)
+    try:
+        await app.start()
+        msg: Message = await app.get_messages(from_chat_id, message_id)
+        if not (msg.video or msg.document):
+            raise ValueError("No video/document in message")
+        
+        file_size = msg.video.file_size if msg.video else msg.document.file_size
+        logger.info(f"Downloading {file_size} bytes from {from_chat_id}/{message_id}")
+        
+        # Download to file with progress
+        def progress(current, total):
+            percent = (current / total) * 100 if total else 0
+            logger.info(f"Download progress: {current}/{total} ({percent:.1f}%)")
+        
+        await app.download_media(msg, file_name=temp_path, progress=progress)
+        logger.info("Download complete")
+        return True
+    except FloodWait as e:
+        logger.error(f"Flood wait: {e.value}s")
+        raise
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        raise
+    finally:
+        await app.stop()
+
+def convert_to_hls(input_path, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    hls_playlist = os.path.join(output_dir, 'playlist.m3u8')
+    
+    hls_cmd = [
+        'ffmpeg', '-i', input_path,
+        '-profile:v', 'baseline', '-level', '3.0', '-start_number', '0',
+        '-hls_time', '10', '-hls_list_size', '0', '-f', 'hls', hls_playlist,
+        '-y'  # Overwrite
+    ]
+    
+    try:
+        result = subprocess.run(hls_cmd, check=True, capture_output=True, timeout=900)  # 15 min for conversion
+        logger.info("HLS conversion complete")
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg timeout")
+        return False
+    except Exception as e:
+        logger.error(f"FFmpeg error: {e}")
+        return False
+
+def cleanup_temp(video_id, keep_hls=True):
+    temp_file = os.path.join(OUTPUT_FOLDER, f"{video_id}.mkv")
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+    if not keep_hls:
+        hls_dir = os.path.join(OUTPUT_FOLDER, video_id, 'hls')
+        if os.path.exists(hls_dir):
+            shutil.rmtree(hls_dir)
+
+@app.route('/stream/<video_id>/<format_type>/<path:filename>')
+def stream_file(video_id, format_type, filename):
+    directory = os.path.join(app.config['OUTPUT_FOLDER'], video_id, format_type)
+    if not os.path.exists(directory):
+        return "Not ready yet - refresh", 404
+    return send_from_directory(directory, filename)
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    message = None
+    message_type = None
+    hls_url = None
+    api_error = None
+    progress = None
+    progress_percent = 0
+    if request.method == 'POST':
+        api_id = int(request.form.get('api_id', 0))
+        api_hash = request.form.get('api_hash', '').strip()
+        session_string = request.form.get('session_string', '').strip()
+        chat_id = request.form.get('chat_id', '').strip()
+        telegram_link = request.form.get('telegram_link', '').strip()
+        
+        if not all([api_id, api_hash, session_string, telegram_link]):
+            message = "All Pyrogram creds and link required."
+            message_type = 'danger'
+        else:
+            from_chat_id, message_id = parse_telegram_link(telegram_link)
+            if not from_chat_id:
+                message = "Invalid link format."
+                message_type = 'danger'
+            else:
+                target_chat_id = chat_id or from_chat_id
+                video_id = str(uuid.uuid4())
+                temp_path = os.path.join(OUTPUT_FOLDER, f"{video_id}.mkv")
+                hls_dir = os.path.join(OUTPUT_FOLDER, video_id, 'hls')
+                
+                try:
+                    # Download async
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    success = loop.run_until_complete(download_large_file(api_id, api_hash, session_string, from_chat_id, message_id, temp_path))
+                    loop.close()
+                    
+                    if not success:
+                        raise ValueError("Download failed")
+                    
+                    # Convert to HLS
+                    if convert_to_hls(temp_path, hls_dir):
+                        hls_url = f"/stream/{video_id}/hls/playlist.m3u8"
+                        message = f"✅ {video_id} streamed! (Cleanup in 1hr)"
+                        message_type = 'success'
+                        cleanup_temp(video_id)  # Remove raw file, keep HLS
+                    else:
+                        raise ValueError("HLS failed")
+                        
+                except Exception as e:
+                    message = "Error during download/conversion."
+                    message_type = 'danger'
+                    api_error = str(e)
+                    cleanup_temp(video_id, keep_hls=False)
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+    
+    # For progress, you'd need a task ID/session storage (e.g., Redis); here, simple log-based
+    return render_template('index.html',
+        message=message, message_type=message_type, hls_url=hls_url,
+        api_error=api_error, progress=progress, progress_percent=progress_percent
+    )
+
+if __name__ == '__main__':
+    app.run(debug=True)
