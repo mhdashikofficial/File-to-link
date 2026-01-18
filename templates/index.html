@@ -48,22 +48,42 @@
 <div class="alert alert-{{ message_type }}">{{ message }}</div>
 {% endif %}
 <form method="POST">
+    <input class="form-control mb-3" name="bot_token" placeholder="Bot Token (required; bot must be admin in channel)" required>
+    <input class="form-control mb-3" name="chat_id" placeholder="@channel or -100xxxx (channel ID)">
     <div class="input-group mb-3">
         <input class="form-control" name="telegram_link" placeholder="https://t.me/channelname/123" required>
         <button class="btn btn-primary" type="submit">▶️ Stream Video</button>
     </div>
 </form>
-{% if embed_src %}
+{% if hls_url %}
 <div class="mt-4">
     <h6 class="text-center mb-3">Streaming Video:</h6>
-    <iframe class="video-player" src="{{ embed_src }}" allowfullscreen></iframe>
+    <video id="video" class="video-player" controls autoplay muted></video>
     <div class="text-center mt-2">
-        <small class="text-muted">Powered by Telegram Embed</small>
+        <small class="text-muted">Powered by HLS.js & FFmpeg</small>
     </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+    var video = document.getElementById('video');
+    var hls_url = "{{ hls_url }}";
+    if (Hls.isSupported()) {
+        var hls = new Hls();
+        hls.loadSource(hls_url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, function() {
+            video.play();
+        });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = hls_url;
+        video.addEventListener('loadedmetadata', function() {
+            video.play();
+        });
+    }
+</script>
 {% endif %}
 <div class="mt-4 text-center">
-    <div class="text-muted small">© Adapted for Streaming</div>
+    <div class="text-muted small">© Adapted for Streaming | Requires FFmpeg installed</div>
     <a href="https://t.me/alexanderthegreatxx" target="_blank" class="telegram-btn mt-2">
         Connect on Telegram
     </a>
