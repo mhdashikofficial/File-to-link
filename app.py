@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_from_directory
 import re
 import requests
 import json
@@ -6,14 +6,14 @@ import os
 import uuid
 import subprocess
 import logging
-from werkzeug.utils import secure_filename
+import shutil  # Added for cleanup
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
-OUTPUT_FOLDER = 'streams'
+# Configuration - FIXED: Use /tmp for writable FS in serverless
+OUTPUT_FOLDER = '/tmp/streams'
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
@@ -73,16 +73,29 @@ def convert_to_hls(input_url, output_dir):
     ]
     
     try:
-        subprocess.run(hls_cmd, check=True, capture_output=True)
+        result = subprocess.run(hls_cmd, check=True, capture_output=True, timeout=300)  # Added timeout for large files
         logger.info(f"HLS conversion completed for {input_url}")
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"HLS conversion failed: {e}")
         return False
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg timeout - file too large?")
+        return False
+
+def cleanup_old_streams():
+    """Optional: Clean up old streams in /tmp to free space"""
+    if os.path.exists(OUTPUT_FOLDER):
+        for item in os.listdir(OUTPUT_FOLDER):
+            item_path = os.path.join(OUTPUT_FOLDER, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path, ignore_errors=True)
 
 @app.route('/stream/<video_id>/<format_type>/<path:filename>')
 def stream_file(video_id, format_type, filename):
     directory = os.path.join(app.config['OUTPUT_FOLDER'], video_id, format_type)
+    if not os.path.exists(directory):
+        return "File not found", 404
     return send_from_directory(directory, filename)
 
 @app.route('/', methods=['GET', 'POST'])
@@ -110,6 +123,9 @@ def index():
                 # Use provided chat_id or parse from link
                 target_chat_id = chat_id or from_chat_id
                 try:
+                    # Optional cleanup on each request to manage /tmp space
+                    cleanup_old_streams()
+                    
                     file_id = get_file_id_from_forward(bot_token, from_chat_id, message_id, target_chat_id)
                     if not file_id:
                         message = "Could not retrieve file. Ensure bot is admin in channel and post contains video/document."
