@@ -27,7 +27,7 @@ def parse_telegram_link(link):
     if match:
         channel = match.group(1)
         post_id = int(match.group(2))
-        from_chat_id = f"@{channel}" if channel[0].isalpha() else channel  # Assume username starts with letter
+        from_chat_id = f"@{channel}" if not channel.startswith('-100') else channel  # Handle username or ID
         return from_chat_id, post_id
     return None, None
 
@@ -40,13 +40,21 @@ def get_file_id_from_forward(bot_token, from_chat_id, message_id, chat_id):
     }
     r = requests.post(url, data=payload, timeout=30)
     res = r.json()
+    logger.info(f"ForwardMessage response: {json.dumps(res, indent=2)}")  # Log full response
     if res.get("ok"):
         forwarded_msg = res['result']
         if 'video' in forwarded_msg:
+            logger.info("Found video file_id")
             return forwarded_msg['video']['file_id']
         elif 'document' in forwarded_msg:
+            logger.info("Found document file_id (e.g., MKV)")
             return forwarded_msg['document']['file_id']
-    return None
+        else:
+            logger.warning(f"No video/document in forwarded message: {forwarded_msg.keys()}")
+            return None
+    else:
+        logger.error(f"ForwardMessage failed: {res}")
+        return None
 
 def get_direct_url(bot_token, file_id):
     # Get file path
@@ -54,10 +62,15 @@ def get_direct_url(bot_token, file_id):
     payload = {"file_id": file_id}
     r = requests.post(url, data=payload, timeout=30)
     res = r.json()
+    logger.info(f"GetFile response: {json.dumps(res, indent=2)}")  # Log full response for debugging
     if res.get("ok"):
         file_path = res['result']['file_path']
-        return f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-    return None
+        direct_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+        logger.info(f"Direct URL generated: {direct_url}")
+        return direct_url
+    else:
+        logger.error(f"GetFile failed: {res}")
+        return None
 
 def convert_to_hls(input_url, output_dir):
     os.makedirs(output_dir, exist_ok=True)
@@ -103,6 +116,7 @@ def index():
     message = None
     message_type = None
     hls_url = None
+    api_error = None  # New: To show detailed API errors
     if request.method == 'POST':
         bot_token = request.form.get('bot_token', '').strip()
         chat_id = request.form.get('chat_id', '').strip()
@@ -130,11 +144,13 @@ def index():
                     if not file_id:
                         message = "Could not retrieve file. Ensure bot is admin in channel and post contains video/document."
                         message_type = 'danger'
+                        api_error = "Check logs for ForwardMessage response. Post may lack media."
                     else:
                         direct_url = get_direct_url(bot_token, file_id)
                         if not direct_url:
                             message = "Could not get direct file URL."
                             message_type = 'danger'
+                            api_error = "Check logs for GetFile response. Invalid file_id or permissions?"
                         else:
                             video_id = str(uuid.uuid4())
                             hls_dir = os.path.join(app.config['OUTPUT_FOLDER'], video_id, 'hls')
@@ -148,10 +164,12 @@ def index():
                 except Exception as e:
                     message = f"Error: {str(e)}"
                     message_type = 'danger'
+                    api_error = str(e)
     return render_template('index.html',
         message=message,
         message_type=message_type,
-        hls_url=hls_url
+        hls_url=hls_url,
+        api_error=api_error  # Pass to template for display
     )
 
 if __name__ == '__main__':
