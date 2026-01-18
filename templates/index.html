@@ -50,11 +50,15 @@
 {% if api_error %}
 <div class="alert alert-warning">
     <strong>Debug Info:</strong> {{ api_error }}
-    <br><small>Check server logs for full API responses (e.g., ForwardMessage/GetFile JSON).</small>
+    <br><small>Check server logs for full API responses.</small>
 </div>
 {% endif %}
 <form method="POST">
-    <input class="form-control mb-3" name="bot_token" placeholder="Bot Token (required; bot must be admin in channel)" required>
+    <h6>Pyrogram Credentials (for large files >20MB)</h6>
+    <input class="form-control mb-3" name="api_id" placeholder="API ID (int from my.telegram.org)" type="number" required>
+    <input class="form-control mb-3" name="api_hash" placeholder="API Hash (string)" required>
+    <input class="form-control mb-3" name="session_string" placeholder="Session String (e.g., 1:BQA...)" required>
+    <input class="form-control mb-3" name="bot_token" placeholder="Bot Token (fallback for small files; optional)">
     <input class="form-control mb-3" name="chat_id" placeholder="@channel or -100xxxx (channel ID; optional if public)">
     <div class="input-group mb-3">
         <input class="form-control" name="telegram_link" placeholder="https://t.me/channelname/123" required>
@@ -66,7 +70,7 @@
     <h6 class="text-center mb-3">Streaming Video:</h6>
     <video id="video" class="video-player" controls autoplay muted></video>
     <div class="text-center mt-2">
-        <small class="text-muted">Powered by HLS.js & FFmpeg</small>
+        <small class="text-muted">Powered by HLS.js & FFmpeg + Pyrogram</small>
     </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
@@ -89,7 +93,7 @@
 </script>
 {% endif %}
 <div class="mt-4 text-center">
-    <div class="text-muted small">© Adapted for Streaming | Requires FFmpeg installed</div>
+    <div class="text-muted small">© Adapted for Streaming | Requires FFmpeg & Pyrogram</div>
     <a href="https://t.me/alexanderthegreatxx" target="_blank" class="telegram-btn mt-2">
         Connect on Telegram
     </a>
