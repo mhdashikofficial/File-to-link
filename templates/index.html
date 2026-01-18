@@ -47,9 +47,15 @@
 {% if message %}
 <div class="alert alert-{{ message_type }}">{{ message }}</div>
 {% endif %}
+{% if api_error %}
+<div class="alert alert-warning">
+    <strong>Debug Info:</strong> {{ api_error }}
+    <br><small>Check server logs for full API responses (e.g., ForwardMessage/GetFile JSON).</small>
+</div>
+{% endif %}
 <form method="POST">
     <input class="form-control mb-3" name="bot_token" placeholder="Bot Token (required; bot must be admin in channel)" required>
-    <input class="form-control mb-3" name="chat_id" placeholder="@channel or -100xxxx (channel ID)">
+    <input class="form-control mb-3" name="chat_id" placeholder="@channel or -100xxxx (channel ID; optional if public)">
     <div class="input-group mb-3">
         <input class="form-control" name="telegram_link" placeholder="https://t.me/channelname/123" required>
         <button class="btn btn-primary" type="submit">▶️ Stream Video</button>
